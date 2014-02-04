@@ -5,6 +5,8 @@ import requests
 import subprocess
 import multiprocessing
 from multiprocessing import Process
+import time
+import signal
 
 class DoubanFM():
     """docstring for DoubanFM"""
@@ -137,52 +139,73 @@ class MusicPlayer():
                 self.douban.changeChannel(1)
 
     def control(self):
-        self.q_pro_name = multiprocessing.Queue()
+        self.pro = None
+        timeout = 0.25
         while True:
-            cmd = self.queue.get()
+            try: cmd = self.queue.get(True, timeout)
+            except: cmd = "no cmd"
+            #print "control: get cmd: ", cmd
+            if self.pro and self.pro.poll() is not None:
+                # not Running
+                print "Not running"
+                self.stop_a_song()
+                song_url = self.douban.endCurSong()
+                self.start_a_song(song_url['url'])
+
             if cmd == 'start':
+                print "control: get cmd: ", cmd
                 song_url = self.douban.endCurSong()
                 self.start_a_song(song_url['url'])
             elif cmd == 'end':
+                print "control: get cmd: ", cmd
                 self.stop_a_song()
                 song_url = self.douban.endCurSong()
                 self.start_a_song(song_url['url'])
             elif cmd == 'skip':
+                print "control: get cmd: ", cmd
                 self.stop_a_song()
                 song_url = self.douban.skipCurrentSong()
                 self.start_a_song(song_url['url'])
             elif cmd == 'quit':
+                print "control: get cmd: ", cmd
                 self.stop_a_song()
                 self.douban.bye()
                 break;
             elif cmd == 'pause_toggle':
+                print "control: get cmd: ", cmd
                 if self.pro:
+                    print "pause_toggle: self.pro exists."
                     self.pro.stdin.write(' ')
+            elif cmd == "no cmd":
+                pass
+            elif cmd == "stop":
+                self.stop_a_song()
             else:
                 print "control: Unknown command"
 
 
     def start_a_song(self, url):
-        self.cur_play_thread = Process(target = self.playing, args=(url,))
-        self.cur_play_thread.start()
-        self.pro = self.q_pro_name.get()
+        cmd = ['mplayer',url]
+        self.pro = subprocess.Popen(cmd, stdin=subprocess.PIPE,
+                stdout=open('/dev/null'), stderr=open('/dev/null'))
+        print "start_a_song: end"
+        self.stopped = False
+        self.paused = False
 
     def stop_a_song(self):
+        print "in: stop_a_song."
         if self.pro:
+            print "stop_a_song: self.pro exists."
             self.pro.terminate()
-        self.cur_play_thread.terminate()
-        self.cur_play_thread.join()
-        self.cur_play_thread = None
+            self.pro.wait()
+        self.pro = None
+        self.paused = False
+        self.stopped = True
+        print "stop_a_song: end"
 
     def playing(self, url):
         cmd = ['mplayer',url]
-        pro = subprocess.Popen(cmd,stdin=subprocess.PIPE, stdout=subprocess.PIPE,stderr=subprocess.PIPE)
-        self.q_pro_name.put(pro)
-        try:
-            pro.communicate()
-        except Exception, e:
-            pro.terminate()
-        self.queue.put('end')
+        self.pro = subprocess.Popen(cmd,stdin=subprocess.PIPE, stdout=subprocess.PIPE,stderr=subprocess.PIPE)
 
     def player_start(self):
         self.queue.put('start')
@@ -204,3 +227,5 @@ class MusicPlayer():
 
     def player_pause_toggle(self):
         self.queue.put('pause_toggle')
+
+mc = MusicPlayer()
