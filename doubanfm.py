@@ -1,12 +1,11 @@
 #!/usr/bin/env python
 
-import json
 import requests
 import subprocess
 import multiprocessing
 from multiprocessing import Process
-import time
-import signal
+import logging
+import sys
 
 class DoubanFM():
     """docstring for DoubanFM"""
@@ -16,7 +15,9 @@ class DoubanFM():
         self.channel = 1
         self.cur_song = {'sid':''}
         self.proxy = None
-        self.debug = True
+        self.logger = logging.getLogger('DoubanFM')
+        self.logger.addHandler(logging.StreamHandler(sys.stdout))
+        self.logger.setLevel(logging.DEBUG)
 
     def login(self, email, passwd):
         url = 'http://www.douban.com/j/app/login'
@@ -33,17 +34,15 @@ class DoubanFM():
         self.token = data['token']
         self.expire = data['expire']
         self.logined = True
-        if self.debug:
-            print "self.user_id = ", self.user_id
-            print "self.token = ", self.token
-            print "self.expire = ", self.expire
-            print "self.logined = ", self.logined
+        self.logger.debug("self.user_id = %s", self.user_id)
+        self.logger.debug("self.token = %s", self.token)
+        self.logger.debug("self.expire = %s", self.expire)
+        self.logger.debug("self.logined = %s", self.logined)
         return True
 
     def changeChannel(self, channel):
         self.channel = channel
-        if self.debug:
-            print "self.channel = ", self.channel
+        self.logger.debug("self.channel = %s", self.channel)
         self.song_list = []
 
     def getChannels(self):
@@ -79,7 +78,8 @@ class DoubanFM():
     def sendMsg(self):
         url = 'http://www.douban.com/j/app/radio/people'
         payload = self.getParams()
-        r = requests.get(url,params=payload,proxies=self.proxy)
+        try: r = requests.get(url,params=payload,proxies=self.proxy)
+        except: r = {}
         return r
 
     def getSongList(self):
@@ -128,6 +128,9 @@ class MusicPlayer():
     def __init__(self):
         self.queue = multiprocessing.Queue()
         self.douban = DoubanFM();
+        self.logger = logging.getLogger('Music Player')
+        self.logger.addHandler(logging.StreamHandler(sys.stdout))
+        self.logger.setLevel(logging.DEBUG)
         #c = raw_input('channel:')
         c = 2
         self.douban.changeChannel(int(c))
@@ -140,6 +143,7 @@ class MusicPlayer():
 
     def control(self):
         self.pro = None
+        self.paused = False
         timeout = 0.25
         while True:
             try: cmd = self.queue.get(True, timeout)
@@ -147,65 +151,58 @@ class MusicPlayer():
             #print "control: get cmd: ", cmd
             if self.pro and self.pro.poll() is not None:
                 # not Running
-                print "Not running"
+                self.logger.info("Not running")
                 self.stop_a_song()
                 song_url = self.douban.endCurSong()
                 self.start_a_song(song_url['url'])
 
             if cmd == 'start':
-                print "control: get cmd: ", cmd
-                song_url = self.douban.endCurSong()
-                self.start_a_song(song_url['url'])
-            elif cmd == 'end':
-                print "control: get cmd: ", cmd
-                self.stop_a_song()
+                self.logger.debug('control: get cmd: %s', cmd)
                 song_url = self.douban.endCurSong()
                 self.start_a_song(song_url['url'])
             elif cmd == 'skip':
-                print "control: get cmd: ", cmd
+                self.logger.debug("control: get cmd: %s", cmd)
                 self.stop_a_song()
                 song_url = self.douban.skipCurrentSong()
                 self.start_a_song(song_url['url'])
             elif cmd == 'quit':
-                print "control: get cmd: ", cmd
+                self.logger.debug("control: get cmd: %s", cmd)
                 self.stop_a_song()
                 self.douban.bye()
                 break;
             elif cmd == 'pause_toggle':
-                print "control: get cmd: ", cmd
+                self.logger.debug("control: get cmd: %s", cmd)
                 if self.pro:
-                    print "pause_toggle: self.pro exists."
+                    self.logger.debug("pause_toggle: self.pro exists.")
                     self.pro.stdin.write(' ')
+                    self.paused = not self.paused
             elif cmd == "no cmd":
                 pass
             elif cmd == "stop":
                 self.stop_a_song()
             else:
-                print "control: Unknown command"
+                self.logger.debug("control: Unknown command")
 
 
     def start_a_song(self, url):
         cmd = ['mplayer',url]
         self.pro = subprocess.Popen(cmd, stdin=subprocess.PIPE,
                 stdout=open('/dev/null'), stderr=open('/dev/null'))
-        print "start_a_song: end"
-        self.stopped = False
+        self.logger.debug("start_a_song: end")
         self.paused = False
 
     def stop_a_song(self):
-        print "in: stop_a_song."
-        if self.pro:
-            print "stop_a_song: self.pro exists."
-            self.pro.terminate()
+        self.logger.debug("in: stop_a_song.")
+        if self.pro and self.pro.poll() is None:
+            self.logger.debug("stop_a_song: mplayer is running")
+            try: 
+                self.pro.stdin.write('q')
+            except Exception, e: 
+                self.pro.terminate()
             self.pro.wait()
         self.pro = None
         self.paused = False
-        self.stopped = True
-        print "stop_a_song: end"
-
-    def playing(self, url):
-        cmd = ['mplayer',url]
-        self.pro = subprocess.Popen(cmd,stdin=subprocess.PIPE, stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        self.logger.debug("stop_a_song: end")
 
     def player_start(self):
         self.queue.put('start')
